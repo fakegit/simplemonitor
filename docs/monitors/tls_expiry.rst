@@ -5,8 +5,6 @@ Checks an SSL/TLS certificate is not due to expire/has expired.
 
 .. note:: This monitor's :ref:`gap<gap>` defaults to 12 hours.
 
-.. warning:: Due to a limitation of the underlying Python modules in use, this does not currently support TLS 1.3.
-
 .. confval:: host
 
     :type: string
@@ -36,3 +34,11 @@ Checks an SSL/TLS certificate is not due to expire/has expired.
     :required: false
 
     the hostname to send during TLS handshake for SNI. Use if you are serving multiple certificates from the same host/port. If empty, will just get the default certificate from the server
+
+..  confval:: timeout
+
+    :type: int
+    :required: false
+    :default: ``5``
+
+    the timeout for the socket to connect/receive data, in seconds

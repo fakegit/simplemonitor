@@ -8,7 +8,6 @@ from simplemonitor import util
 
 
 class TestUtil(unittest.TestCase):
-
     one_KB = 1024
     one_MB = one_KB * 1024
     one_GB = one_MB * 1024
@@ -202,16 +201,47 @@ class TestUpDownTime(unittest.TestCase):
         u2 = util.UpDownTime(2, 2, 3, 4)
         self.assertNotEqual(u1, u2)
 
+    def test_minute(self):
+        u = util.UpDownTime(0, 0, 1, 0)
+        self.assertEqual(str(u), "0+00:01:00")
+
+    def test_60_sec(self):
+        u = util.UpDownTime(0, 0, 0, 60)
+        self.assertEqual(str(u), "0+00:01:00")
+
+    def test_values_overrun(self):
+        u = util.UpDownTime(0, 23, 59, 60)
+        self.assertEqual(str(u), "1+00:00:00")
+
 
 class TestGroupMatch(unittest.TestCase):
     def test_simple(self):
         self.assertTrue(util.check_group_match("default", ["default"]))
 
+    def test_simple_2(self):
+        self.assertTrue(util.check_group_match(["default"], ["default"]))
+
     def test_list(self):
         self.assertTrue(util.check_group_match("test", ["test", "test2"]))
 
+    def test_string(self):
+        self.assertTrue(util.check_group_match("test3,test2", ["test", "test2"]))
+
+    def test_string_false(self):
+        self.assertFalse(util.check_group_match("test3,test4", ["test", "test2"]))
+
+    def test_list_2(self):
+        self.assertTrue(
+            util.check_group_match(["test3", "test1"], ["test", "test1", "test2"])
+        )
+
     def test_not_list(self):
         self.assertFalse(util.check_group_match("default", ["test1", "test2"]))
+
+    def test_not_list_2(self):
+        self.assertFalse(
+            util.check_group_match(["default", "test3"], ["test1", "test2"])
+        )
 
     def test_all(self):
         self.assertTrue(util.check_group_match("test", ["_all"]))

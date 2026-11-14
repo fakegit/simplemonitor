@@ -109,11 +109,11 @@ These options are common to all monitor types.
 
 .. confval:: group
 
-    :type: string
+    :type: comma-separated list of string
     :required: false
     :default: ``default``
 
-    the group the monitor belongs to. Alerters and Loggers will only fire for monitors which appear in their groups.
+    the group(s) the monitor belongs to. Alerters and Loggers will only fire for monitors which appear in their groups.
 
 .. confval:: failure_doc
 
@@ -132,6 +132,29 @@ These options are common to all monitor types.
 
     comma-separated latitude and longitude of this monitor
 
+.. confval:: enabled
+
+    :type: boolean
+    :required: false
+    :default: true
+
+    Set to false to turn off the monitor
+
+.. confval:: remind
+
+    :type: int
+    :required: false
+    :default: none
+
+    Number of minutes between repeating alerts for this monitor (as though it had just failed). Note you will also need to enable :confval:`allow_reminders` on alerters for them to send reminders.
+
+.. confval:: navlink
+
+    :type: string
+    :required: false
+    :default: none
+
+    A clickable URL of type http, https or mailto that will be added to the monitor name in the HTML view
 
 .. _monitors-list:
 

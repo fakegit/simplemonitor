@@ -48,6 +48,20 @@ You can use the ``upload_command`` setting to specify a command to push the gene
 
     if set, a command to execute each time the output is updated to e.g. upload the files to an external webserver
 
+.. confval:: navbar_title
+
+    :type: string
+    :required: false
+
+    if set, the title to show at the top of the page. The default is "SimpleMonitor"
+
+.. confval:: visual_theme
+
+    :type: string
+    :required: false
+
+    the visual theme for the HTML page. Set to "dark" for dark mode. The default is "light"
+
 .. confval:: map
 
     :type: boolean
@@ -58,13 +72,6 @@ You can use the ``upload_command`` setting to specify a command to push the gene
 .. confval:: map_start
 
     :type: comma-separated list of float
-    :required: false
+    :required: if ``map`` is enabled
 
     three comma-separated values: the latitude the map display should start at, the longitude, and the zoom level. A good starting value for the zoom is probably between 10 and 15.
-
-.. confval:: map_token
-
-    :type: string
-    :required: yes, if using the map
-
-    an API token for mapbox.com in order to make the map work

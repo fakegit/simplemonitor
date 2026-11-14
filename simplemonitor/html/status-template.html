@@ -1,11 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-bs-theme="{{visual_theme}}">
   <head>
     <meta charset="utf-8" />
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1, shrink-to-fit=no"
     />
+    <link rel="shortcut icon" href="data:,">
 
     <title>{{status}}@{{host}} monitor</title>
 
@@ -14,25 +15,15 @@
     <script src="maps.bundle.js"></script>
 {%- endif %}
     <meta http-equiv="refresh" content="{{interval}}" />
-    <script language="javascript" type="text/javascript">
-      function check_age() {
-        var generated = {{timestamp}};
-        var now = Date.parse(new Date()) / 1000;
-        var diff = now - generated;
-        if (diff > ({{interval}} * 2)) {
-          too_old();
-        }
-      }
-      </script>
     </head>
 
-    <body onload="check_age();">
+    <body>
       <div
-        class="navbar navbar-light bg-light border-bottom {{status_border}}"
+        class="navbar navbar-light border-bottom {{status_border}}"
         id="summary"
       >
       <div class="container-fluid">
-        <div class="navbar-brand">SimpleMonitor</div>
+        <div class="navbar-brand">{{navbar_title}}</div>
         <div class="navbar-text d-none d-lg-block" id="updated">
           Updated at {{now}} by {{host}} ({{version}})
         </div>
@@ -53,12 +44,9 @@
           zoom: {{ map_start.zoom }}
         });
         L.tileLayer(
-          'https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token={{ map_token }}', {
+          'https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 18,
-            attribution: 'Map data &copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a> contributors, ' +
-                '<a href="https://creativecommons.org/licenses/by-sa/2.0/">CC-BY-SA</a>, ' +
-                'Imagery &copy; <a href="https://www.mapbox.com/">Mapbox</a>',
-            id: 'mapbox/streets-v11'
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           }).addTo(mymap);
 
 {% macro map_pin(entry) -%}
@@ -98,9 +86,9 @@
             <span
               data-toggle="tooltip"
               data-placement="right"
-              title="{{entry.description}}"
-              >{{entry.monitor_name}}</span
-            >
+              title="{{entry.description|e}}">
+              {% if entry.monitor_url %}<a href="{{entry.monitor_url}}" target="_blank">{{entry.monitor_name}}</a>{% else %}{{entry.monitor_name}}{% endif %}
+            </span>
           </td>
           <td{% if entry.cell_class %} class="{{entry.cell_class}}"{% endif %}>{{entry.status_text}}</td>
           <td>{{entry.host}}</td>
@@ -120,7 +108,7 @@
           <td>{{entry.failures}}</td>
           <td>{{entry.last_failure}}</td>
           {% endif %}
-          <td>{% if not entry.my_host %}{{entry.age}}{% endif %}</td>
+          <td>{% if not entry.my_host or entry.status_text == "OLD" %}{{entry.age}}{% endif %}</td>
         </tr>
 {%- endmacro -%}
 {% for entry in fail_entries -%}
@@ -149,23 +137,41 @@
       </div>
     </div>
     <script language="javascript" type="text/javascript">
+
+      function check_age() {
+        const generated = {{timestamp}};
+        const now = Math.floor(Date.now() / 1000);
+        const diff = now - generated;
+        if (diff > ({{interval}} * 2)) {
+          too_old();
+        }
+      }
+
       $(function () {
-        var tooltipTriggerList = [].slice.call(
-          document.querySelectorAll('[data-toggle="tooltip"]')
-        );
-        var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
-          return new bootstrap.Tooltip(tooltipTriggerEl);
+        const tooltip_trigger_list = document.querySelectorAll('[data-toggle="tooltip"]');
+        tooltip_trigger_list.forEach(tooltip_trigger_el => {
+          new bootstrap.Tooltip(tooltip_trigger_el);
         });
-        check_age();
-        setTimeout(too_old, ({{interval}} * 2000));
-        update_props = {
-            timestamp: {{timestamp}},
-            host: "{{host}}",
-            version: "{{version}}",
-            updated: "{{now}}",
+
+        const update_props = {
+          timestamp: {{timestamp}},
+          host: "{{host}}",
+          version: "{{version}}",
+          updated: "{{now}}",
         };
+
+	if (document.readyState === "loading") {
+          document.addEventListener('DOMContentLoaded', (event) => {
+            check_age();
+            update_age(update_props);
+          });
+        } else {
+          check_age();
+          update_age(update_props);
+        }
+
+        setTimeout(too_old, ({{interval}} * 2000));
         setInterval(update_age, 5000, update_props);
-        update_age(update_props);
       });
     </script>
   </body>

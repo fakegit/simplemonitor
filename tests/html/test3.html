@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, shrink-to-fit=no"
+    />
+    <link rel="shortcut icon" href="data:,">
+
+    <title>FAIL@fake_hostname.local monitor</title>
+
+    <script src="main.bundle.js"></script>
+    <meta http-equiv="refresh" content="30" />
+    </head>
+
+    <body>
+      <div
+        class="navbar navbar-light border-bottom border-danger"
+        id="summary"
+      >
+      <div class="container-fluid">
+        <div class="navbar-brand">Custom NavBar Title</div>
+        <div class="navbar-text d-none d-lg-block" id="updated">
+          Updated at 2020-04-18 12:00:00+00:00 by fake_hostname.local (__VERSION__)
+        </div>
+        <div class="navbar-text" id="refresh_status">
+          <span class="badge bg-warning d-none" id="refresh_badge"
+            >OUT OF DATE</span
+          >
+        </div>
+        <div class="navbar-text"><span class="badge bg-success">1 OK</span>  <span class="badge bg-danger">1 FAIL</span>  <span class="badge bg-secondary">1 DISABLED</span>   </div>
+        </div>
+      </div>
+      <table class="table table-borderless table-striped table-hover table-sm">
+        <tr>
+          <th scope="col">Monitor</th>
+          <th scope="col">Status</th>
+          <th scope="col">Host</th>
+          <th scope="col">Failed at</th>
+          <th scope="col">VFC</th>
+          <th scope="col">Up/downtime</th>
+          <th scope="col">Detail</th>
+          <th scope="col">Failures</th>
+          <th scope="col">Last Failure</th>
+          <th scope="col">Age</th>
+        </tr>
+<tr class="table-danger">
+          <td>
+            <span
+              data-toggle="tooltip"
+              data-placement="right"
+              title="A monitor which always fails.">
+              fail
+            </span>
+          </td>
+          <td>FAIL</td>
+          <td>fake_hostname</td>
+          <td>2020-04-18 12:00:00+00:00</td>
+          <td>1</td>
+          <td>0+00:00:00 (<span
+              data-toggle="tooltip"
+              data-placement="right"
+              title="0.00000%"
+              >0.00%</span
+            >)
+          </td>
+          <td>This monitor always fails.</td>
+          
+          <td>1</td>
+          <td>2020-04-18 12:00:00+00:00</td>
+          
+          <td></td>
+        </tr>
+<tr>
+          <td>
+            <span
+              data-toggle="tooltip"
+              data-placement="right"
+              title="A monitor which always fails.">
+              disabled
+            </span>
+          </td>
+          <td>DISABLED</td>
+          <td>fake_hostname</td>
+          <td></td>
+          <td></td>
+          <td>0+00:00:00 (<span
+              data-toggle="tooltip"
+              data-placement="right"
+              title="0.00000%"
+              >0.00%</span
+            >)
+          </td>
+          <td></td>
+          
+          <td></td><td></td>
+          
+          <td></td>
+        </tr>
+<tr>
+          <td>
+            <span
+              data-toggle="tooltip"
+              data-placement="right"
+              title="(Monitor did not write an auto-biography.)">
+              unnamed
+            </span>
+          </td>
+          <td class="table-success">OK</td>
+          <td>fake_hostname</td>
+          <td></td>
+          <td></td>
+          <td>0+00:00:00 (<span
+              data-toggle="tooltip"
+              data-placement="right"
+              title="0.00000%"
+              >0.00%</span
+            >)
+          </td>
+          <td></td>
+          
+          <td></td><td></td>
+          
+          <td></td>
+        </tr>
+</table>
+    <div class="navbar-text d-block d-lg-none" id="updatedfooter">
+      Updated at 2020-04-18 12:00:00+00:00<br />by fake_hostname.local (__VERSION__)
+    </div>
+    <div class="container-fluid">
+      <div class="text-end text-muted">
+        SimpleMonitor __VERSION__
+        <a
+          href="https://simplemonitor.readthedocs.io/en/latest/index.html"
+          target="_blank"
+          >&raquo; Documentation</a
+        >
+        |
+        <a href="https://github.com/jamesoff/simplemonitor" target="_blank"
+          >&raquo; Code</a
+        >
+      </div>
+    </div>
+    <script language="javascript" type="text/javascript">
+
+      function check_age() {
+        const generated = 1587211200;
+        const now = Math.floor(Date.now() / 1000);
+        const diff = now - generated;
+        if (diff > (30 * 2)) {
+          too_old();
+        }
+      }
+
+      $(function () {
+        const tooltip_trigger_list = document.querySelectorAll('[data-toggle="tooltip"]');
+        tooltip_trigger_list.forEach(tooltip_trigger_el => {
+          new bootstrap.Tooltip(tooltip_trigger_el);
+        });
+
+        const update_props = {
+          timestamp: 1587211200,
+          host: "fake_hostname.local",
+          version: "__VERSION__",
+          updated: "2020-04-18 12:00:00+00:00",
+        };
+
+	if (document.readyState === "loading") {
+          document.addEventListener('DOMContentLoaded', (event) => {
+            check_age();
+            update_age(update_props);
+          });
+        } else {
+          check_age();
+          update_age(update_props);
+        }
+
+        setTimeout(too_old, (30 * 2000));
+        setInterval(update_age, 5000, update_props);
+      });
+    </script>
+  </body>
+</html>

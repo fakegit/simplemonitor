@@ -8,13 +8,13 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.6', '3.7', '3.8', '3.9']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
     name: Python ${{ matrix.python-version }}
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Setup python
-        uses: actions/setup-python@v1
+        uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
           architecture: x64
@@ -26,15 +26,11 @@ jobs:
         run: pip install poetry
       - name: poetry install
         run: poetry install
-      - name: check code style with black
-        run: make black
-        if: ${{ matrix.python-version == '3.8' || matrix.python-version == '3.9' }}  # broken in 3.6 currently
-      - name: flake8 tests
-        run: make flake8
-        if: ${{ matrix.python-version == '3.8' || matrix.python-version == '3.9' }}
+      - name: check code style with ruff
+        run: make ruff-format-check
+      - name: ruff check
+        run: make ruff-check
       - name: bandit
         run: make bandit
-        if: ${{ matrix.python-version == '3.8' || matrix.python-version == '3.9' }}
       - name: mypy
         run: make mypy
-        if: ${{ matrix.python-version == '3.8' || matrix.python-version == '3.9' }}

@@ -18,9 +18,8 @@ from requests.auth import HTTPBasicAuth
 from .monitor import Monitor, register
 
 try:
-    import ping3
+    from icmplib import NameLookupError, SocketPermissionError, ping
 
-    ping3.EXCEPTIONS = True
 except ImportError:
     pass
 
@@ -33,40 +32,88 @@ class MonitorHTTP(Monitor):
     regexp = None
     regexp_text = ""
     allowed_codes = []  # type: List[int]
+    allow_redirects = True  # type: bool
 
     monitor_type = "http"
+    method = "GET"
 
     # optional - for HTTPS client authentication only
-    certfile = None
-    keyfile = None
+    certfile: Optional[str] = None
+    keyfile: Optional[str] = None
+    cert: Optional[tuple] = None
+
+    auth: Optional[HTTPBasicAuth] = None
 
     # optional - headers
-    headers = None
+    headers: Optional[dict] = None
+    data: Optional[str] = None
 
     def __init__(self, name: str, config_options: dict) -> None:
         super().__init__(name, config_options)
         self.url = self.get_config_option("url", required=True)
 
+        method = self.get_config_option("method")
+        if method is not None:
+            method = method.strip().upper()
+            if method in ["GET", "POST", "HEAD"]:
+                self.method = method
+            else:
+                raise ValueError("unsupported HTTP method")
+
         regexp = self.get_config_option("regexp")
         if regexp is not None:
             self.regexp = re.compile(regexp)
             self.regexp_text = regexp
+
         self.allowed_codes = self.get_config_option(
             "allowed_codes", default=[200], required_type="[int]"
         )
+        self.allow_redirects = self.get_config_option(
+            "allow_redirects",
+            default=True,
+            required_type="bool",
+        )
 
-        # optionnal - for HTTPS client authentication only
+        # optional - for HTTPS client authentication only
         # in this case, certfile is required
-        self.certfile = config_options.get("certfile")
-        self.keyfile = config_options.get("keyfile")
+        self.certfile = cast(Optional[str], config_options.get("certfile"))
+        self.keyfile = cast(Optional[str], config_options.get("keyfile"))
         if self.certfile and not self.keyfile:
             self.keyfile = self.certfile
         if not self.certfile and self.keyfile:
             raise ValueError("config option keyfile is set but certfile is not")
 
-        self.headers = config_options.get("headers")
-        if self.headers:
-            self.headers = json.loads(self.headers)
+        if self.certfile is not None and self.keyfile is not None:
+            self.cert = (self.certfile, self.keyfile)
+            assert self.certfile is not None and self.keyfile is not None
+        else:
+            self.cert = None
+
+        headers = config_options.get("headers")
+        if headers:
+            try:
+                self.headers = json.loads(headers)
+            except json.JSONDecodeError as e:
+                self.monitor_logger.error(f"Parsing headers to JSON failed: {e}")
+                self.headers = None
+
+        self.data = None
+        self.json = None
+
+        if self.method == "POST":
+            data_json = config_options.get("json")
+            if data_json:
+                try:
+                    self.json = json.loads(data_json)
+                except json.JSONDecodeError as e:
+                    self.monitor_logger.error(f"Parsing json to JSON failed: {e}")
+                    self.json = None
+
+            self.data = config_options.get("data")
+
+        if self.json and self.data:
+            self.data = None
+            raise ValueError("Use only one option - either json OR data")
 
         self.verify_hostname = self.get_config_option(
             "verify_hostname", default=True, required_type="bool"
@@ -76,37 +123,30 @@ class MonitorHTTP(Monitor):
             "timeout", default=5, required_type="int"
         )
 
-        self.username = config_options.get("username")
-        self.password = config_options.get("password")
+        self.username = cast(Optional[str], config_options.get("username"))
+        self.password = cast(Optional[str], config_options.get("password"))
+
+        if self.username is not None and self.password is not None:
+            self.auth = HTTPBasicAuth(self.username, self.password)
+        else:
+            self.auth = None
 
     def run_test(self) -> bool:
         start_time = arrow.get()
         end_time = None
         try:
-            if self.certfile is None and self.username is None:
-                response = requests.get(
-                    self.url,
-                    timeout=self.request_timeout,
-                    verify=self.verify_hostname,
-                    headers=self.headers,
-                )
-            elif self.certfile is None and self.username is not None:
-                response = requests.get(
-                    self.url,
-                    timeout=self.request_timeout,
-                    auth=HTTPBasicAuth(self.username, self.password),
-                    verify=self.verify_hostname,
-                    headers=self.headers,
-                )
-            else:
-                response = requests.get(
-                    self.url,
-                    timeout=self.request_timeout,
-                    cert=(self.certfile, self.keyfile),
-                    verify=self.verify_hostname,
-                    headers=self.headers,
-                )
-
+            response = requests.request(
+                self.method,
+                self.url,
+                headers=self.headers,
+                timeout=self.request_timeout,
+                verify=self.verify_hostname,
+                allow_redirects=self.allow_redirects,
+                auth=self.auth,
+                cert=self.cert,
+                data=self.data,
+                json=self.json,
+            )
             end_time = arrow.get()
             load_time = end_time - start_time
             if response.status_code not in self.allowed_codes:
@@ -222,17 +262,21 @@ class MonitorHost(Monitor):
         )
         ping_ms = str(ping_ttl * 1000)
         ping_ttl = str(ping_ttl)
+        self.count = cast(
+            int,
+            self.get_config_option("count", required_type="int", default=1, minimum=1),
+        )
         platform = sys.platform
         if platform in ["win32", "cygwin"]:
-            self.ping_command = "ping -n 1 -w " + ping_ms + " %s"
+            self.ping_command = f"ping -n {self.count} -w " + ping_ms + " %s"
             self.ping_regexp = r"Reply from [0-9a-f:.]+:.+time[=<]\d+ms"
             self.time_regexp = r"Average = (?P<ms>\d+)ms"
         elif platform.startswith("freebsd") or platform.startswith("darwin"):
-            self.ping_command = "ping -c1 -t" + ping_ttl + " %s"
+            self.ping_command = f"ping -c{self.count} -t" + ping_ttl + " %s"
             self.ping_regexp = "bytes from"
             self.time_regexp = r"min/avg/max/stddev = [\d.]+/(?P<ms>[\d.]+)/"
         elif platform.startswith("linux"):
-            self.ping_command = "ping -c1 -W" + ping_ttl + " %s"
+            self.ping_command = f"ping -c{self.count} -W" + ping_ttl + " %s"
             self.ping_regexp = "bytes from"
             self.time_regexp = r"min/avg/max/stddev = [\d.]+/(?P<ms>[\d.]+)/"
         else:
@@ -288,12 +332,10 @@ class MonitorDNS(Monitor):
     def __init__(self, name: str, config_options: dict) -> None:
         super().__init__(name, config_options)
         self.path = self.get_config_option("record", required=True)
-
         self.desired_val = self.get_config_option("desired_val")
-
         self.server = self.get_config_option("server")
-
         self.params = [self.command]
+        self.port = self.get_config_option("port", required_type="int")
 
         if self.server:
             self.params.append("@%s" % self.server)
@@ -305,6 +347,9 @@ class MonitorDNS(Monitor):
 
         self.params.append(self.path)
         self.params.append("+short")
+
+        if self.port:
+            self.params.extend(["-p", str(self.port)])
 
     def run_test(self) -> bool:
         try:
@@ -343,7 +388,16 @@ class MonitorDNS(Monitor):
             very_end_part = " at %s" % self.server
         else:
             very_end_part = ""
-        return "Checking that DNS %s %s%s" % (mid_part, end_part, very_end_part)
+        try:
+            port_part = f" on port {self.port}" if self.port else ""
+        except AttributeError:
+            port_part = ""
+        return "Checking that DNS %s %s%s%s" % (
+            mid_part,
+            end_part,
+            very_end_part,
+            port_part,
+        )
 
     def get_params(self) -> Tuple:
         return (self.path,)
@@ -363,26 +417,53 @@ class MonitorPing(Monitor):
         self.timeout = cast(
             int, self.get_config_option("timeout", required_type="int", default=5)
         )
+        self.count = cast(
+            int,
+            self.get_config_option("count", required_type="int", default=1, minimum=1),
+        )
+        self.family = cast(
+            Optional[int],
+            self.get_config_option(
+                "family",
+                required_type="int",
+                # None is here so the default is allowed
+                allowed_values=[None, 4, 6],
+                required=False,
+                default=None,
+            ),
+        )
 
     def run_test(self) -> bool:
-        if "ping3" not in sys.modules:
-            return self.record_fail("Missing required ping3 module")
+        if "icmplib" not in sys.modules:
+            return self.record_fail("Missing required icmplib module")
         try:
-            response_time = ping3.ping(self.host, timeout=self.timeout, unit="ms")
-            return self.record_success("Ping time {:0.3f}ms".format(response_time))
-        except ping3.errors.PingError as excepton:
-            return self.record_fail(str(excepton))
-        except PermissionError:
+            result = ping(
+                self.host, count=self.count, timeout=self.timeout, family=self.family
+            )
+            if result.is_alive:
+                return self.record_success(
+                    "RTT for {}: {:0.3f}ms".format(result.address, result.avg_rtt)
+                )
+            return self.record_fail(f"Host {result.address} is not alive")
+        except NameLookupError:
+            return self.record_fail(f"Failed to resolve {self.host}")
+        except SocketPermissionError:
             return self.record_fail(
                 "ping monitor requires root to work; "
                 "try the 'host' monitor if this is not an option for you"
             )
 
     def get_params(self) -> Tuple:
-        return (self.host, self.timeout)
+        return (self.host, self.timeout, self.count)
 
     def describe(self) -> str:
-        return "Checking {} pings within {} seconds".format(self.host, self.timeout)
+        return "Checking {} pings within {} seconds ({} attempt{}{})".format(
+            self.host,
+            self.timeout,
+            self.count,
+            "s" if self.count > 1 else "",
+            f", IPv{self.family}" if self.family else "",
+        )
 
 
 @register
@@ -394,7 +475,6 @@ class MonitorTLSCert(Monitor):
     def __init__(self, name: str, config_options: Optional[dict]) -> None:
         if config_options is None:
             config_options = {}
-        self.minimum_gap = 43200  # 12 hours
         super().__init__(name=name, config_options=config_options)
         self.host = cast(str, self.get_config_option("host", required=True))
         self.port = cast(
@@ -403,18 +483,24 @@ class MonitorTLSCert(Monitor):
         self.min_days = cast(
             int, self.get_config_option("min_days", required_type="int", default=7)
         )
+        self.minimum_gap = cast(
+            int, self.get_config_option("gap", required_type="int", default=43200)
+        )  # 12 hours
         if self.min_days < 0:
             raise ValueError("min_days must be 0 or greater")
         self.sni = cast(Optional[str], self.get_config_option("sni", required=False))
+        self.timeout = cast(
+            int, self.get_config_option("timeout", required_type="int", default=5)
+        )
 
     def run_test(self) -> bool:
-        # Note: at time of writing, ssl does not support TLS1.3
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ssl_context.verify_mode = ssl.CERT_REQUIRED
         ssl_context.check_hostname = bool(self.sni)
         ssl_context.load_default_certs()
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(self.timeout)
             with ssl_context.wrap_socket(
                 sock, server_hostname=self.sni if self.sni else None
             ) as ssl_sock:
@@ -423,6 +509,9 @@ class MonitorTLSCert(Monitor):
                 except socket.gaierror as error:
                     self.monitor_logger.exception("Failed to connect socket")
                     return self.record_fail("Failed to connect: {}".format(error))
+                except socket.timeout:
+                    self.monitor_logger.exception("Timeout during connect")
+                    return self.record_fail("Connection timed out")
                 except ssl.CertificateError as error:
                     self.monitor_logger.exception(
                         "SSL certification validation error: %s", error.verify_message
@@ -435,26 +524,31 @@ class MonitorTLSCert(Monitor):
                     return self.record_fail("SSL Error: {}".format(error.reason))
                 cert = ssl_sock.getpeercert()
                 if not cert:
-                    return self.record_fail("Did not receive certifcate")
+                    return self.record_fail("Did not receive certificate")
                 not_after = str(cert["notAfter"])
                 expiry = datetime.datetime.strptime(not_after, r"%b %d %H:%M:%S %Y %Z")
                 delta = expiry - datetime.datetime.utcnow()
                 days_left = delta.days
+                sni = (
+                    self.sni + " "
+                    if (self.sni and self.sni.casefold() != self.host.casefold())
+                    else ""
+                )
                 if days_left < self.min_days:
                     if days_left < 0:
                         return self.record_fail(
-                            "Certificate at {}:{} expired {} days ago".format(
-                                self.host, self.port, abs(days_left)
+                            "Certificate {}at {}:{} expired {} days ago".format(
+                                sni, self.host, self.port, abs(days_left)
                             )
                         )
                     return self.record_fail(
-                        "Certificate at {}:{} expires in {} days".format(
-                            self.host, self.port, days_left
+                        "Certificate {}at {}:{} expires in {} days".format(
+                            sni, self.host, self.port, days_left
                         )
                     )
                 return self.record_success(
-                    "Certificate at {}:{} has {} days left to expiry".format(
-                        self.host, self.port, days_left
+                    "Certificate {}at {}:{} has {} days left to expiry".format(
+                        sni, self.host, self.port, days_left
                     )
                 )
 

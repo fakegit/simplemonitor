@@ -4,7 +4,6 @@ Logging for SimpleMonitor.
 Loggers process every monitor, every iteration, to record their state in some fashion.
 """
 
-
 import logging
 import time
 from typing import Any, Dict, List, Optional, Union, cast
@@ -50,9 +49,16 @@ class Logger:
                 default="timestamp",
             ),
         )
+        self.enabled = cast(
+            bool, self.get_config_option("enabled", required_type="bool", default=True)
+        )
 
         if self._global_info is None:
             self._global_info = {}
+        self.heartbeat = cast(
+            bool,
+            self.get_config_option("heartbeat", required_type="bool", default=False),
+        )
 
     def __enter__(self) -> None:
         """Context manager entry."""

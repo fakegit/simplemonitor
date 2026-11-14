@@ -1,12 +1,12 @@
 # coding=utf-8
-"""A (fairly) simple host/service monitor. """
-
+"""A (fairly) simple host/service monitor."""
 
 import argparse
 import logging
 import os
 import sys
 
+from .const import EXIT_CODE_CONFIG_FAILED
 from .simplemonitor import SimpleMonitor
 from .version import VERSION
 
@@ -78,7 +78,7 @@ def main() -> None:
         default="monitor.ini",
         help=(
             "configuration file (this is the main config; "
-            "you also need monitors.ini (default filename)"
+            "you also need monitors.ini (default filename))"
         ),
     )
     parser.add_argument(
@@ -107,7 +107,7 @@ def main() -> None:
         default=False,
         help=(
             "Run the monitors once only, without alerting. Require monitors without "
-            '"fail" in the name to succeed. Exit zero or non-zero accordingly.'
+            '"fail" in the name to succeed. Exit zero or non-zero accordingly'
         ),
     )
     testing_group.add_argument(
@@ -152,6 +152,7 @@ def main() -> None:
 
     if options.dump_resources:
         import pprint
+
         import simplemonitor.Alerters.alerter as alerter
         import simplemonitor.Loggers.logger as logger
         import simplemonitor.Monitors.monitor as monitor
@@ -218,9 +219,13 @@ def main() -> None:
         max_workers=options.threads,
     )
 
-    if options.test:
-        main_logger.warning("Config test complete. Exiting.")
-        sys.exit(0)
+    if m.config_ok:
+        if options.test:
+            main_logger.warning("Config test complete. Exiting.")
+            sys.exit(0)
+    else:
+        main_logger.error("Configuration not valid")
+        sys.exit(EXIT_CODE_CONFIG_FAILED)
 
     if options.one_shot:
         main_logger.warning(

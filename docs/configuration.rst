@@ -1,3 +1,5 @@
+.. _Configuration:
+
 Configuration
 =============
 
@@ -59,6 +61,22 @@ This file must contain a ``[monitor]`` section, which must contain at least the 
 
     the filename to load the monitors themselves from. Relative to the cwd, not
     the path of this configuration file.
+
+    If you want to use only ``monitors_dir``, set this to nothing (``monitors=``).
+
+
+
+.. confval:: monitors_dir
+
+    :type: string
+    :required: false
+
+    a directory to scan for ``*.ini`` files which are merged with the main
+    monitors config file. Files are loaded in lexicographic order, and if a
+    monitor name is reused, the last definition wins. Relative to the cwd, not
+    the path of this configuration file.
+
+    The main ``monitors`` file is always loaded first.
 
 .. confval:: pidfile
 
@@ -217,7 +235,7 @@ Reloading
 You can send SimpleMonitor a SIGHUP to make it reload its configuration. On
 platforms which don't have that (e.g. Windows), you can specify a file to
 watch. If the modification time of the file changes, SimpleMonitor will reload
-its configration.
+its configuration.
 
 Reloading will pick up a change to ``interval`` but no other configuration in
 the ``[monitor]`` section. Monitors, Alerters and Loggers are reloaded. You can

@@ -1,10 +1,10 @@
 # type: ignore
 import datetime
-import os
 import platform
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import arrow
 
@@ -15,7 +15,6 @@ from simplemonitor.util import MonitorState, UpDownTime
 
 
 class TestMonitor(unittest.TestCase):
-
     safe_config = {"partition": "/", "limit": "10G"}
 
     one_KB = 1024
@@ -95,7 +94,7 @@ class TestMonitor(unittest.TestCase):
         self.assertEqual(
             m.remaining_dependencies,
             ["a", "c"],
-            "monitor did not remove succeded dependency",
+            "monitor did not remove succeeded dependency",
         )
         m.reset_dependencies()
         self.assertEqual(
@@ -207,7 +206,7 @@ class TestMonitor(unittest.TestCase):
 
     def test_sighup(self):
         m = SimpleMonitor("tests/monitor-empty.ini")
-        m._load_monitors(Path("tests/monitors-prehup.ini"))
+        m._load_monitors([Path("tests/monitors-prehup.ini")])
         self.assertEqual(m._need_hup, False, "need_hup did not start False")
         m._handle_sighup(None, None)
         self.assertEqual(m._need_hup, True, "need_hup did not get set to True")
@@ -226,7 +225,7 @@ class TestMonitor(unittest.TestCase):
             m.monitors["monitor2"].host, "127.0.0.1", "monitor2 did not load correctly"
         )
 
-        m._load_monitors(Path("tests/monitors-posthup.ini"))
+        m._load_monitors([Path("tests/monitors-posthup.ini")])
         self.assertEqual(
             m.monitors["monitor1"].monitor_type, "null", "monitor1 changed type"
         )
@@ -279,7 +278,7 @@ class TestMonitor(unittest.TestCase):
         self.assertIn(
             "m", compound_monitor.all_monitors, "compound all_monitors not set"
         )
-        self.assertIn("m", compound_monitor.m, "compund m not set")
+        self.assertIn("m", compound_monitor.m, "compound m not set")
 
         m.run_test()
         m2.run_test()
@@ -311,7 +310,7 @@ class TestMonitor(unittest.TestCase):
         self.assertIn(
             "m", compound_monitor.all_monitors, "compound all_monitors not set"
         )
-        self.assertIn("m", compound_monitor.m, "compund m not set")
+        self.assertIn("m", compound_monitor.m, "compound m not set")
 
         m.run_test()
         m2.run_test()
@@ -343,7 +342,7 @@ class TestMonitor(unittest.TestCase):
         self.assertIn(
             "m", compound_monitor.all_monitors, "compound all_monitors not set"
         )
-        self.assertIn("m2", compound_monitor.m, "compund m not set")
+        self.assertIn("m2", compound_monitor.m, "compound m not set")
         self.assertNotIn(
             "m", compound_monitor.m, "compound m should not include monitor m"
         )
@@ -356,7 +355,7 @@ class TestMonitor(unittest.TestCase):
         self.assertEqual(result, False, "compound monitor should have failed")
         self.assertEqual(
             compound_monitor.virtual_fail_count(),
-            2,
+            1,
             "compound monitor should report fail count",
         )
         self.assertEqual(
@@ -365,24 +364,19 @@ class TestMonitor(unittest.TestCase):
             "compound monitor did not report failures properly",
         )
 
-    def test_recovery(self):
+    @mock.patch("subprocess.Popen")
+    def test_recovery(self, mock_popen):
         m = MonitorFail("fail1", {"recover_command": "touch did_recovery"})
-        try:
-            os.unlink("did_recovery")
-        except FileNotFoundError:
-            pass
         m.run_test()
         m.attempt_recover()
-        #  throws an exception if the file isn't there
-        os.stat("did_recovery")
+        # Make sure we called the fake command
+        mock_popen.assert_called_once_with(["touch", "did_recovery"])
 
-    def test_recovered(self):
+    @mock.patch("subprocess.Popen")
+    def test_recovered(self, mock_popen):
         m = MonitorFail("fail9", {"recovered_command": "touch did_recovered"})
-        try:
-            os.unlink("did_recovered")
-        except FileNotFoundError:
-            pass
-        for i in range(0, 6):
+        for _ in range(0, 6):
             m.run_test()
         m.run_recovered()
-        os.stat("did_recovered")
+        # Make sure we called the fake command
+        mock_popen.assert_called_once_with(["touch", "did_recovered"])

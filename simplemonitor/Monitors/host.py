@@ -2,12 +2,18 @@
 Monitor things on a host for SimpleMonitor
 """
 
+import json
 import os
+import os.path
 import re
 import shlex
 import subprocess  # nosec
 import time
-from typing import Tuple, cast
+from typing import Optional, Tuple, cast
+from urllib.parse import urlsplit
+
+from markupsafe import escape
+from packaging.version import parse
 
 from ..util import bytes_to_size_string, size_string_to_bytes
 from .monitor import Monitor, register
@@ -110,22 +116,20 @@ class MonitorFileStat(Monitor):
         try:
             statinfo = os.stat(self.filename)
         except FileNotFoundError:
-            return self.record_fail("File %s does not exist" % self.filename)
+            return self.record_fail(f"File {self.filename} does not exist")
         except Exception as error:
-            return self.record_fail("Unable to check file: %s" % error)
+            return self.record_fail(f"Unable to check file: {error}")
 
         if self.minsize:
             if statinfo.st_size < self.minsize:
                 return self.record_fail(
-                    "Size is %d, should be >= %d bytes"
-                    % (statinfo.st_size, self.minsize)
+                    f"Size is {statinfo.st_size}, should be >= {self.minsize} bytes"
                 )
 
         if self.maxsize:
             if statinfo.st_size > self.maxsize:
                 return self.record_fail(
-                    "Size is %d, should be <= %d bytes"
-                    % (statinfo.st_size, self.maxsize)
+                    f"Size is {statinfo.st_size}, should be <= {self.maxsize} bytes"
                 )
 
         now = time.time()
@@ -133,22 +137,20 @@ class MonitorFileStat(Monitor):
         if self.maxage:
             if diff > self.maxage:
                 return self.record_fail(
-                    "Age is %d, should be < %d seconds" % (diff, self.maxage)
+                    f"Age is {diff}, should be < {self.maxage} seconds"
                 )
 
         return self.record_success(
-            "File {} exists (age: {}, size: {})".format(
-                self.filename, int(diff), statinfo.st_size
-            )
+            f"File {self.filename} exists (age: {int(diff)}, size: {statinfo.st_size})"
         )
 
     def describe(self) -> str:
         """Explains what we do"""
-        desc = "Checking %s exists" % self.filename
+        desc = f"Checking {self.filename} exists"
         if self.maxage:
-            desc = desc + " and is not older than %d seconds" % self.maxage
+            desc = desc + f" and is not older than {self.maxage} seconds"
         if self.minsize:
-            desc = desc + " and is not smaller than %d bytes" % self.minsize
+            desc = desc + f" and is not smaller than {self.minsize} bytes"
         return desc
 
     def get_params(self) -> Tuple:
@@ -222,6 +224,70 @@ class MonitorApcupsd(Monitor):
 
 
 @register
+class MonitorNUT(Monitor):
+    """Check a NUT UPS"""
+
+    monitor_type = "nut"
+
+    def __init__(self, name: str, config_options: dict) -> None:
+        super().__init__(name, config_options)
+        self.ups = cast(
+            str, self.get_config_option("ups", required=True, allow_empty=False)
+        )
+
+    def run_test(self) -> bool:
+        info = {}
+        try:
+            _output = subprocess.check_output(["upsc", self.ups])  # nosec
+            output = _output.decode("utf-8")  # type: str
+        except subprocess.CalledProcessError as error:
+            output = error.output
+        except OSError as error:
+            return self.record_fail(f"Could not run upsc: {error}")
+        except Exception as error:
+            return self.record_fail(f"Error while getting UPS info: {error}")
+
+        for line in output.splitlines():
+            if line.find(":") > -1:
+                bits = line.split(":")
+                info[bits[0].strip()] = bits[1].strip()
+
+        try:
+            ups_status = cast(str, info["ups.status"])
+        except KeyError:
+            return self.record_fail("Could not get UPS status")
+
+        status_tokens = ups_status.split()
+        ok = True
+        message: list[str] = []
+        if "OB" in status_tokens:
+            message.append("UPS is on battery")
+            ok = False
+        if "OL" in status_tokens:
+            message.append("online")
+        if "RB" in status_tokens:
+            message.append("battery needs replacing!")
+            ok = False
+        if "ups.load" in info:
+            message.append(f"load: {info['ups.load']}%")
+        if "battery.charge" in info:
+            message.append(f"charge: {info['battery.charge']}")
+        if "battery.runtime" in info:
+            message.append(f"runtime: {info['battery.runtime']}")
+
+        message_str = "; ".join(message)
+        if ok:
+            return self.record_success(message_str)
+        return self.record_fail(message_str)
+
+    def describe(self) -> str:
+        return f"Monitoring UPS {self.ups} to make sure it's online"
+
+    def get_params(self) -> Tuple:
+        return (self.ups,)
+
+
+@register
 class MonitorPortAudit(Monitor):
     """Check a host doesn't have outstanding security issues."""
 
@@ -271,51 +337,74 @@ class MonitorPortAudit(Monitor):
 
 @register
 class MonitorPkgAudit(Monitor):
-    """Check a host doesn't have outstanding security issues."""
+    """Check a host doesn't have outstanding security issues.
+
+    Allows overriding of entries by vuxml UUID
+    """
 
     monitor_type = "pkgaudit"
-    regexp = re.compile(r"(\d+) problem\(s\) in \w+ installed package(s|\(s\)) found")
     path = ""
 
     def __init__(self, name: str, config_options: dict) -> None:
         super().__init__(name, config_options)
         self.path = self.get_config_option("path", default="")
+        self.ignore_list = cast(
+            list[str], self.get_config_option("ignore", required_type="list[str]")
+        )
+        self.jail = cast(Optional[str], self.get_config_option("jail"))
 
     def describe(self) -> str:
-        return "Checking for insecure packages."
+        if self.jail:
+            return f"Checking for insecure packages in jail {self.jail}"
+        else:
+            return "Checking for insecure packages"
 
     def get_params(self) -> Tuple:
         return (self.path,)
 
     def run_test(self) -> bool:
+        if self.path == "":
+            self.path = "/usr/local/sbin/pkg"
         try:
-            if self.path == "":
-                self.path = "/usr/local/sbin/pkg"
-            try:
-                _output = subprocess.check_output([self.path, "audit"])  # nosec
-                output = _output.decode("utf-8")
-            except subprocess.CalledProcessError as error:
-                output = error.output.decode("utf-8")
-            except OSError as error:
-                return self.record_fail(
-                    "Failed to run %s audit: {0} {1}".format(self.path, error)
-                )
-            except Exception as error:
-                return self.record_fail("Error running pkg audit: {0}".format(error))
-
-            for line in output.splitlines():
-                matches = self.regexp.match(line)
-                if matches:
-                    count = int(matches.group(1))
-                    # sanity check
-                    if count == 0:
-                        return self.record_success()
-                    if count == 1:
-                        return self.record_fail("1 problem")
-                    return self.record_fail("%d problems" % count)
-            return self.record_success()
+            cmd = []
+            cmd.append(self.path)
+            if self.jail:
+                cmd.extend(["-j", self.jail])
+            cmd.extend(["audit", "--raw=json"])
+            _output = subprocess.run(cmd, capture_output=True)  # nosec
+            output = json.loads(_output.stdout.decode("utf-8"))
+        except json.JSONDecodeError as error:
+            self.monitor_logger.exception(error)
+            return self.record_fail(f"Failed to decode JSON output: {error}")
+        except OSError as error:
+            return self.record_fail(f"Failed to run {self.path} audit: {error}")
         except Exception as error:
-            return self.record_fail("Could not run pkg: %s" % error)
+            return self.record_fail(f"Error running pkg audit: {error}")
+
+        try:
+            count = int(output["pkg_count"])
+        except KeyError:
+            return self.record_fail("Failed to find pkg_count in output")
+        ignored = 0
+        if self.ignore_list:
+            for package in output.get("packages", {}).values():
+                for issue in package.get("issues", []):
+                    if url := issue.get("url"):
+                        url_info = urlsplit(url)
+                        filename = os.path.splitext(os.path.basename(url_info.path))[0]
+                        if filename in self.ignore_list:
+                            count -= 1
+                            ignored += 1
+                            break
+        if ignored:
+            ignore_text = f"({ignored} problem{'s' if ignored > 1 else ''} ignored)"
+        else:
+            ignore_text = ""
+        if count == 0:
+            return self.record_success(ignore_text)
+        return self.record_fail(
+            f"{count} problem{'s' if count > 1 else ''} found {ignore_text}".strip()
+        )
 
 
 @register
@@ -411,7 +500,7 @@ class MonitorSwap(Monitor):
             return self.record_fail("psutil is not installed")
         stats = psutil.swap_memory()
         percent = 100 - stats.percent
-        message = "{:.2}% free".format(percent)
+        message = f"{percent:.2f}% free"
         if percent < self.percent_free:
             return self.record_fail(message)
         return self.record_success(message)
@@ -420,7 +509,7 @@ class MonitorSwap(Monitor):
         return (self.percent_free,)
 
     def describe(self) -> str:
-        return "Checking for at least {}% free swap".format(self.percent_free)
+        return f"Checking for at least {self.percent_free}% free swap"
 
 
 @register
@@ -482,6 +571,9 @@ class MonitorCommand(Monitor):
                     "result_max settings simultaneously"
                 )
                 self.result_max = None
+        self.show_output = self.get_config_option(
+            "show_output", required_type="bool", default=False
+        )
 
         command = self.get_config_option("command", required=True, allow_empty=False)
         self.command = shlex.split(command)
@@ -502,7 +594,14 @@ class MonitorCommand(Monitor):
                         "%s < %s" % (outasinteger, self.result_max)
                     )
                 return self.record_fail("%s >= %s" % (outasinteger, self.result_max))
-            return self.record_success()
+            msg = ""
+            if self.show_output:
+                msg = escape(_out.decode("utf-8"))
+            return self.record_success(msg)
+        except subprocess.CalledProcessError as exception:
+            if self.show_output:
+                return self.record_fail(exception.output.decode("utf-8"))
+            return self.record_fail(str(exception))
         except Exception as exception:
             return self.record_fail(str(exception))
 
@@ -518,7 +617,111 @@ class MonitorCommand(Monitor):
                 " ".join(self.command),
                 self.result_max,
             )
-        return 'checking command "%s" has return status 0' % " ".join(self.command)
+        return "checking command '%s' has return status 0" % " ".join(self.command)
 
     def get_params(self) -> Tuple:
-        return (self.command, self.result_regexp_text, self.result_max)
+        return (
+            self.command,
+            self.result_regexp_text,
+            self.result_max,
+            self.show_output,
+        )
+
+
+@register
+class MonitorZpool(Monitor):
+    """Check zpool status is healthy"""
+
+    monitor_type = "zpool"
+
+    def __init__(self, name: str, config_options: dict) -> None:
+        super().__init__(name, config_options)
+        self.pools = cast(
+            list[str], self.get_config_option("pools", required_type="[str]")
+        )
+        self.use_json = False
+        try:
+            zpool_output = subprocess.run(
+                ["zpool", "--version"], capture_output=True
+            ).stdout.decode()  # nosec
+            zpool_version = parse(zpool_output.splitlines()[0].split("-")[1])
+            if zpool_version >= parse("2.4.0"):
+                self.use_json = True
+        except Exception:
+            self.monitor_logger.warning(
+                "Failed to divine zpool version; using text parsing"
+            )
+
+    def describe(self) -> str:
+        if not self.pools:
+            pools = "all zpools"
+        else:
+            pools = "zpools: " + ", ".join(self.pools)
+        return f"Checking zpool status for {pools}"
+
+    def get_params(self) -> Tuple:
+        return (self.pools,)
+
+    def _run_test_json(self) -> Optional[str]:
+        """Return error information, or None if all ok."""
+        messages: list[str] = []
+        cmd = ["zpool", "status", "-j"]
+        if self.pools:
+            cmd.extend(self.pools)
+        try:
+            _output = subprocess.run(cmd, capture_output=True)
+        except subprocess.SubprocessError:
+            return "Failed to run zpool status"
+        try:
+            zpool_info = json.loads(_output.stdout.decode())
+        except Exception:
+            return "Failed to parse zpool JSON output"
+        for pool in zpool_info["pools"].values():
+            if pool["state"] != "ONLINE":
+                messages.append(f"pool {pool['name']} is {pool['state']}")
+        if len(messages) == 0:
+            return None
+        return ", ".join(messages)
+
+    def _run_test_text(self) -> Optional[str]:
+        """Return error information, or None if all ok."""
+        messages: list[str] = []
+        cmd = ["zpool", "status"]
+        if self.pools:
+            cmd.extend(self.pools)
+        try:
+            _output = subprocess.run(cmd, capture_output=True)
+        except subprocess.SubprocessError:
+            return "Failed to run zpool status"
+        zpool_info = _output.stdout.decode()
+        current_pool = None
+        for line in zpool_info.splitlines():
+            matches = re.match(r" *pool: (.+)", line)
+            if matches:
+                if current_pool:
+                    return "Failed to parse zpool status output"
+                current_pool = matches.group(1)
+                continue
+            matches = re.match(r" *state: ([A-Z_]+)", line)
+            if matches:
+                if not current_pool:
+                    return "Failed to parse zpool status output"
+                status = matches.group(1)
+                if status != "ONLINE":
+                    messages.append(f"pool {current_pool} is {matches.group(1)}")
+                current_pool = None
+        if current_pool:
+            messages.append(f"Failed to find status for pool {current_pool}")
+        if len(messages) == 0:
+            return None
+        return ", ".join(messages)
+
+    def run_test(self) -> bool:
+        if self.use_json:
+            message = self._run_test_json()
+        else:
+            message = self._run_test_text()
+        if message:
+            return self.record_fail(message)
+        else:
+            return self.record_success("all pools ONLINE")

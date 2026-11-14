@@ -7,7 +7,7 @@ https://raw.githubusercontent.com/eifinger/appdaemon-scripts/master/seqSink/seqS
 
 import datetime
 import json
-from typing import cast
+from typing import Optional, cast
 
 import requests
 
@@ -24,7 +24,7 @@ class SeqLogger(Logger):
     buffered = False
     dateformat = None
 
-    def __init__(self, config_options: dict = None) -> None:
+    def __init__(self, config_options: Optional[dict] = None) -> None:
         if config_options is None:
             config_options = {}
         super().__init__(config_options)
@@ -32,6 +32,9 @@ class SeqLogger(Logger):
         # i.e. http://192.168.0.5:5341
         self.endpoint = cast(
             str, self.get_config_option("endpoint", required=True, allow_empty=False)
+        )
+        self.timeout = cast(
+            int, self.get_config_option("timeout", required_type="int", default=5)
         )
         # Potentially, would need to add a header for ApiKey
 
@@ -93,7 +96,9 @@ class SeqLogger(Logger):
             return
 
         try:
-            response = requests.post(self.endpoint, json=request_body)
+            response = requests.post(
+                self.endpoint, json=request_body, timeout=self.timeout
+            )
             if not response.status_code == 200 and not response.status_code == 201:
                 self.logger_logger.error(
                     "POST to seq failed with status code: %s", response

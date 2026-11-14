@@ -13,11 +13,26 @@ import copy
 import datetime
 import logging
 import platform
+import re
 import subprocess  # nosec
 import time
-from typing import Any, List, NoReturn, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    NoReturn,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
+from urllib.parse import urlparse
 
 import arrow
+
+if TYPE_CHECKING:
+    from ..simplemonitor import SimpleMonitor
 
 from ..util import (
     MonitorState,
@@ -27,6 +42,8 @@ from ..util import (
     short_hostname,
     subclass_dict_handler,
 )
+
+module_logger = logging.getLogger("simplemonitor")
 
 
 class Monitor:
@@ -53,6 +70,24 @@ class Monitor:
     _first_load = None  # type: Optional[arrow.Arrow]
     unavailable_seconds = 0  # type: int
 
+    def _navlink_validate(self, name: str, url: str) -> str:
+        if not url:
+            return ""
+        try:
+            cleaned_url = re.sub(r"[^a-zA-Z0-9\/:\\\%\.\-\_]", "", url)
+            checked_url = urlparse(cleaned_url)
+            valid_url = all(
+                [checked_url.scheme in ["http", "https", "mailto"], checked_url.netloc]
+            )
+            if valid_url:
+                return cleaned_url
+            else:
+                module_logger.warning(f"Host {name} has an invalid navlink - ignoring")
+                return ""
+        except ValueError:
+            module_logger.warning(f"Host {name} navlink is corrupt - ignoring")
+            return ""
+
     def __init__(
         self, name: str = "unnamed", config_options: Optional[dict] = None
     ) -> None:
@@ -73,7 +108,9 @@ class Monitor:
         self._notify = self.get_config_option(
             "notify", required_type="bool", default=True
         )
-        self.group = cast(str, self.get_config_option("group", default="default"))
+        self.group = "".join(
+            cast(str, self.get_config_option("group", default="default")).split()
+        ).split(",")
         self._tolerance = self.get_config_option(
             "tolerance", required_type="int", default=0, minimum=0
         )
@@ -96,17 +133,28 @@ class Monitor:
         )
         _gps = cast(Optional[str], self.get_config_option("gps"))
         if _gps:
-            self.gps = [
-                float(x) for x in _gps.split(",")
-            ]  # type: Optional[List[float]]
+            self.gps = [float(x) for x in _gps.split(",")]  # type: Optional[List[float]]
         else:
             self.gps = None
+
+        self.navlink = self._navlink_validate(
+            self.name, self.get_config_option("navlink", default=None)
+        )
+
+        self.slug = cast(Optional[str], self.get_config_option("slug"))
 
         self.running_on = short_hostname()
         self._state = MonitorState.UNKNOWN
         self._force_run = True  # set to ensure we re-run ASAP after a HUP
         if self._first_load is None:
             self._first_load = arrow.utcnow()
+        self.ran_this_time = False
+        self.remind_interval: Optional[datetime.timedelta]
+        remind_interval = self.get_config_option("remind", required_type="int")
+        if remind_interval:
+            self.remind_interval = datetime.timedelta(minutes=remind_interval)
+        else:
+            self.remind_interval = None
 
     def get_config_option(
         self,
@@ -210,9 +258,16 @@ class Monitor:
         """Override this method to return a list of parameters (for logging)"""
         raise NotImplementedError
 
-    def set_mon_refs(self, mmm: Any) -> None:
-        """Called with a reference to the list of all monitors.
+    def set_mon_refs(self, mmm: Dict[str, "Monitor"]) -> None:
+        """Save a weak reference to all Monitors.
+
         Only used by CompoundMonitor for now."""
+        pass
+
+    def set_sm_ref(self, sm: "SimpleMonitor") -> None:
+        """Save a weak reference to the SimpleMonitor instance.
+
+        Only used by RemoteHostsMonitors for now."""
         pass
 
     @property
@@ -325,7 +380,7 @@ class Monitor:
 
     @property
     def availability(self) -> float:
-        """Calculate the monitor's availablity"""
+        """Calculate the monitor's availability"""
         if self.tests_run <= 1:
             return 0.0
         if self._first_load is not None:
@@ -477,9 +532,16 @@ class Monitor:
         first_failure_time = self.first_failure_time()
         if first_failure_time is None:
             return UpDownTime()
-        else:
-            downtime = arrow.utcnow() - first_failure_time
+        downtime = arrow.utcnow() - first_failure_time
         return UpDownTime.from_timedelta(downtime)
+
+    def get_wasdowntime(self) -> UpDownTime:
+        """Get the downtime for our last failure"""
+        downtime_started = self._failed_at
+        downtime_ended = self.uptime_start
+        if downtime_started and downtime_ended:
+            return UpDownTime.from_timedelta(downtime_ended - downtime_started)
+        return UpDownTime()
 
     def get_uptime(self) -> UpDownTime:
         """Get monitor uptime"""

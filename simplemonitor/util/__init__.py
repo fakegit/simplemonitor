@@ -60,6 +60,15 @@ class UpDownTime:
         self.hours = hours
         self.minutes = minutes
         self.seconds = seconds
+        if self.seconds >= 60:
+            temp_min, self.seconds = divmod(self.seconds, 60)
+            self.minutes += temp_min
+        if self.minutes >= 60:
+            temp_hour, self.minutes = divmod(self.minutes, 60)
+            self.hours += temp_hour
+        if self.hours >= 24:
+            temp_day, self.hours = divmod(self.hours, 24)
+            self.days += temp_day
 
     def __str__(self) -> str:
         """Format as d+h:m:s"""
@@ -115,10 +124,10 @@ def get_config_option(
 
     value = config_options.get(key, default)
     if required and value is None:
-        raise ValueError("config option {0} is missing and is required".format(key))
+        raise ValueError(f"config option {key} is missing and is required")
     if isinstance(value, str) and required_type:
         if required_type == "str" and value == "" and not allow_empty:
-            raise ValueError("config option {0} cannot be empty".format(key))
+            raise ValueError(f"config option {key} cannot be empty")
         if required_type in ["int", "float"]:
             try:
                 if required_type == "int":
@@ -127,37 +136,37 @@ def get_config_option(
                     value = float(value)
             except TypeError as error:
                 raise TypeError(
-                    "config option {0} needs to be an {1}".format(key, required_type)
+                    f"config option {key} needs to be an {required_type}"
                 ) from error
             if minimum is not None and value < minimum:
-                raise ValueError(
-                    "config option {0} needs to be >= {1}".format(key, minimum)
-                )
+                raise ValueError(f"config option {key} needs to be >= {minimum}")
             if maximum is not None and value > maximum:
-                raise ValueError(
-                    "config option {0} needs to be <= {1}".format(key, maximum)
-                )
+                raise ValueError(f"config option {key} needs to be <= {minimum}")
         if required_type == "[int]":
+            if not isinstance(value, str):
+                raise ValueError(
+                    f"config option {key} needs to be a list of int,int,..."
+                )
             try:
                 value = [int(x) for x in value.split(",")]
             except ValueError as error:
                 raise ValueError(
-                    "config option {0} needs to be a list of int[int,...]".format(key)
+                    f"config option {key} needs to be a list of int[int,...]"
                 ) from error
         if required_type == "bool":
             value = bool(str(value).lower() in ["1", "true", "yes"])
         if required_type == "[str]":
+            if not isinstance(value, str):
+                raise ValueError(
+                    f"config option {key} needs to be a list of int,int,..."
+                )
             value = [x.strip() for x in value.split(",")]
     if isinstance(value, list) and allowed_values:
-        if not all([x in allowed_values for x in value]):
-            raise ValueError(
-                "config option {0} needs to be one of {1}".format(key, allowed_values)
-            )
+        if not all(x in allowed_values for x in value):
+            raise ValueError(f"config option {key} needs to be one of {allowed_values}")
     else:
         if allowed_values is not None and value not in allowed_values:
-            raise ValueError(
-                "config option {0} needs to be one of {1}".format(key, allowed_values)
-            )
+            raise ValueError(f"config option {key} needs to be one of {allowed_values}")
     return value
 
 
@@ -182,7 +191,8 @@ def format_datetime(
 def short_hostname() -> str:
     """Get just our machine name.
 
-    TODO: This might actually be redundant. Python probably provides it's own version of this."""
+    TODO: This might actually be redundant. Python probably provides it's own version of this.
+    """
 
     return (socket.gethostname() + ".").split(".")[0]
 
@@ -192,7 +202,7 @@ def get_config_dict(
 ) -> Dict[str, str]:
     options = config.items(monitor)
     ret = {}
-    for (key, value) in options:
+    for key, value in options:
         ret[key] = value
     return ret
 
@@ -203,7 +213,7 @@ def subclass_dict_handler(
     def _check_is_subclass(cls: Any) -> None:
         if not issubclass(cls, base_cls):
             raise TypeError(
-                ("%s.register may only be used on subclasses " "of %s.%s")
+                ("%s.register may only be used on subclasses of %s.%s")
                 % (mod, mod, base_cls.__name__)
             )
 
@@ -226,7 +236,7 @@ def subclass_dict_handler(
     return (register, get_class, all_types)
 
 
-def check_group_match(group: str, group_list: List[str]) -> bool:
+def check_group_match(group: Union[str, List[str]], group_list: List[str]) -> bool:
     """
     Check if a group is contained in the group list.
 
@@ -234,7 +244,11 @@ def check_group_match(group: str, group_list: List[str]) -> bool:
     """
     if group_list[0] == "_all":
         return True
-    if group in group_list:
+
+    if isinstance(group, str):
+        group = group.strip().split(",")
+
+    if any(element in group_list for element in group):
         return True
     return False
 
@@ -244,10 +258,10 @@ def size_string_to_bytes(s: str) -> Optional[int]:
         return None
     if s.endswith("G"):
         gigs = int(s[:-1])
-        _bytes = gigs * (1024 ** 3)
+        _bytes = gigs * (1024**3)
     elif s.endswith("M"):
         megs = int(s[:-1])
-        _bytes = megs * (1024 ** 2)
+        _bytes = megs * (1024**2)
     elif s.endswith("K"):
         kilos = int(s[:-1])
         _bytes = kilos * 1024

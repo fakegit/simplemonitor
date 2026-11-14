@@ -8,9 +8,10 @@ import os
 import signal
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from socket import gethostname
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union, cast
 
 from .Alerters.alerter import Alerter
 from .Alerters.alerter import all_types as all_alerter_types
@@ -18,7 +19,7 @@ from .Alerters.alerter import get_class as get_alerter_class
 from .Loggers.logger import Logger
 from .Loggers.logger import all_types as all_logger_types
 from .Loggers.logger import get_class as get_logger_class
-from .Loggers.network import Listener
+from .Loggers.network import Listener, RemoteHost
 from .Monitors.compound import CompoundMonitor
 from .Monitors.monitor import Monitor, MonitorState
 from .Monitors.monitor import all_types as all_monitor_types
@@ -41,7 +42,7 @@ class SimpleMonitor:
         max_loops: int = -1,
         heartbeat: bool = True,
         one_shot: bool = False,
-        max_workers: Optional[int] = None
+        max_workers: Optional[int] = None,
     ) -> None:
         """Main class turn on."""
         if isinstance(config_file, str):
@@ -51,7 +52,7 @@ class SimpleMonitor:
         else:
             raise ValueError("config_file must be str or Path")
 
-        self.monitors = {}  # type: Dict[str, Monitor]
+        self.monitors: dict[str, Monitor] = {}
         self.failed = []  # type: List[str]
         self.still_failing = []  # type: List[str]
         self.skipped = []  # type: List[str]
@@ -67,10 +68,12 @@ class SimpleMonitor:
         self._no_network = no_network
         self._remote_listening_thread = None  # type: Optional[Listener]
         self._max_loops = max_loops
+        self.config_ok = False
         self.heartbeat = heartbeat
         self.one_shot = one_shot
         self.pidfile = None  # type: Optional[str]
         self._max_workers = max_workers
+        self._remote_hosts: dict[str, RemoteHost] = {}
 
         self._setup_signals()
         self._load_config()
@@ -78,6 +81,7 @@ class SimpleMonitor:
     def _load_config(self) -> None:
         """Load config, monitors, alerters and loggers."""
 
+        config_ok = True
         config = EnvironmentAwareConfigParser()
         if not self._config_file.exists():
             raise RuntimeError(
@@ -96,10 +100,9 @@ class SimpleMonitor:
             )
             self._check_hup_file()
 
-        if (
-            not self._no_network
-            and config.get("monitor", "remote", fallback="0") == "1"
-        ):
+        if not self._no_network and config.get(
+            "monitor", "remote", fallback="0"
+        ).lower() in ["1", "true", "yes"]:
             self._network = True
             self._remote_port = int(config.get("monitor", "remote_port"))
             self._network_key = config.get("monitor", "key", fallback=None)
@@ -110,17 +113,31 @@ class SimpleMonitor:
         else:
             self._network = False
 
-        monitors_file = Path(config.get("monitor", "monitors", fallback="monitors.ini"))
-        self._load_monitors(monitors_file)
+        monitors_files = [
+            Path(config.get("monitor", "monitors", fallback="monitors.ini"))
+        ]
+        monitors_dir = config.get("monitor", "monitors_dir", fallback=None)
+        if monitors_files[0] == Path("."):
+            module_logger.debug("No main monitors.ini file specified")
+            monitors_files.pop(0)
+        elif not monitors_files[0].exists():
+            raise RuntimeError(
+                f"Monitors configuration file '{monitors_files[0]}' does not exist"
+            )
+        if monitors_dir:
+            monitors_files.extend(list(sorted(Path(monitors_dir).glob("*.ini"))))
+        config_ok = self._load_monitors(monitors_files)
+
         count = self.count_monitors()
         if count == 0:
-            module_logger.critical("No monitors loaded :(")
-        self._load_loggers(config)
-        self._load_alerters(config)
+            module_logger.critical("No monitors loaded")
+        config_ok = config_ok & self._load_loggers(config)
+        config_ok = config_ok & self._load_alerters(config)
         if not self._verify_dependencies():
             raise RuntimeError("Broken dependency configuration")
         if not self.verify_alerting():
-            module_logger.critical("No alerters defined and no remote logger found")
+            module_logger.warning("No alerters defined and no remote logger found")
+        self.config_ok = config_ok
 
     def _start_network_thread(self) -> None:
         if self._remote_listening_thread:
@@ -140,19 +157,16 @@ class SimpleMonitor:
             )
             self._remote_listening_thread.start()
 
-    def _load_monitors(self, filename: Union[Path, str]) -> None:
+    def _load_monitors(self, filenames: Sequence[Union[Path, str]]) -> bool:
         """Load all the monitors from the config file."""
-        if isinstance(filename, str):
-            filename = Path(filename)
-        elif not isinstance(filename, Path):
-            raise ValueError("filename must be str or Path")
-        if not filename.exists():
-            raise RuntimeError(
-                "Monitors config file {} does not exist".format(filename)
-            )
-        module_logger.info("Loading monitor config from %s", filename)
+
+        all_good = True
         config = EnvironmentAwareConfigParser()
-        config.read(filename)
+        config.read(filenames)
+        module_logger.info(
+            "Loaded monitor config from: %s",
+            ", ".join(map(str, filenames)),
+        )
         monitors = config.sections()
         if "defaults" in monitors:
             default_config = get_config_dict(config, "defaults")
@@ -172,7 +186,9 @@ class SimpleMonitor:
                         config.get(this_monitor, "runon"),
                     )
                     continue
+
             monitor_type = config.get(this_monitor, "type")
+
             new_monitor = None
             config_options = default_config.copy()
             config_options.update(get_config_dict(config, this_monitor))
@@ -190,6 +206,7 @@ class SimpleMonitor:
                         self.monitors[this_monitor].monitor_type,
                         config_options["type"],
                     )
+                    all_good = False
                 continue
 
             try:
@@ -200,24 +217,39 @@ class SimpleMonitor:
                     monitor_type,
                     ", ".join(all_monitor_types()),
                 )
+                all_good = False
                 continue
             new_monitor = cls(this_monitor, config_options)
             # new_monitor.set_mon_refs(m)
 
-            module_logger.info(
-                "Adding %s monitor %s: %s", monitor_type, this_monitor, new_monitor
-            )
-            self.add_monitor(this_monitor, new_monitor)
+            if new_monitor.enabled:
+                module_logger.info(
+                    "Adding %s monitor %s: %s", monitor_type, this_monitor, new_monitor
+                )
+                self.add_monitor(this_monitor, new_monitor)
+            else:
+                module_logger.info(
+                    "Skipping disabled %s monitor: %s", monitor_type, this_monitor
+                )
+            # del new_monitor  # ?
 
         for monitor in self.monitors.values():
             monitor.set_mon_refs(self.monitors)
+            monitor.set_sm_ref(self)
             monitor.post_config_setup()
         self.prune_monitors(monitors)
+        if not all_good:
+            module_logger.warning(
+                "--- Loaded %d monitors but with errors", self.count_monitors()
+            )
+            return False
         module_logger.info("--- Loaded %d monitors", self.count_monitors())
+        return True
 
-    def _load_loggers(self, config: EnvironmentAwareConfigParser) -> None:
+    def _load_loggers(self, config: EnvironmentAwareConfigParser) -> bool:
         """Load the loggers listed in the config object."""
 
+        all_good = True
         if config.has_option("reporting", "loggers"):
             loggers = config.get("reporting", "loggers").split(",")
         else:
@@ -242,6 +274,7 @@ class SimpleMonitor:
                         self.loggers[config_logger].logger_type,
                         config_options["type"],
                     )
+                    all_good = False
                 continue
             try:
                 logger_cls = get_logger_class(logger_type)
@@ -251,21 +284,38 @@ class SimpleMonitor:
                     logger_type,
                     ", ".join(all_logger_types()),
                 )
+                all_good = False
                 continue
             new_logger = logger_cls(config_options)  # type: Logger
             new_logger.set_global_info(
                 {"interval": config.getint("monitor", "interval")}
             )
-            module_logger.info(
-                "Adding %s logger %s: %s", logger_type, config_logger, new_logger
-            )
-            self.add_logger(config_logger, new_logger)
+            if new_logger.enabled:
+                module_logger.info(
+                    "Adding %s logger %s: %s",
+                    logger_type,
+                    config_logger,
+                    new_logger.describe(),
+                )
+                self.add_logger(config_logger, new_logger)
+            else:
+                module_logger.info(
+                    "Skipping disabled %s logger: %s", logger_type, config_logger
+                )
+
             del new_logger
         self.prune_loggers(loggers)
+        if not all_good:
+            module_logger.warning(
+                "--- Loaded %d loggers but with errors", len(self.loggers)
+            )
+            return False
         module_logger.info("--- Loaded %d loggers", len(self.loggers))
+        return True
 
-    def _load_alerters(self, config: EnvironmentAwareConfigParser) -> None:
+    def _load_alerters(self, config: EnvironmentAwareConfigParser) -> bool:
         """Load the alerters listed in the config object."""
+        all_good = True
         if config.has_option("reporting", "alerters"):
             alerters = config.get("reporting", "alerters").split(",")
         else:
@@ -289,6 +339,7 @@ class SimpleMonitor:
                         self.alerters[this_alerter].alerter_type,
                         config_options["type"],
                     )
+                    all_good = False
                 continue
             try:
                 alerter_cls = get_alerter_class(alerter_type)
@@ -298,19 +349,33 @@ class SimpleMonitor:
                     alerter_type,
                     ", ".join(all_alerter_types()),
                 )
+                all_good = False
                 continue
             new_alerter = alerter_cls(config_options)  # type: Alerter
-            module_logger.info(
-                "Adding %s alerter %s: %s",
-                alerter_type,
-                this_alerter,
-                new_alerter.describe(),
-            )
-            new_alerter.name = this_alerter
-            self.add_alerter(this_alerter, new_alerter)
+
+            if new_alerter.enabled:
+                module_logger.info(
+                    "Adding %s alerter %s: %s",
+                    alerter_type,
+                    this_alerter,
+                    new_alerter.describe(),
+                )
+                new_alerter.name = this_alerter
+                self.add_alerter(this_alerter, new_alerter)
+            else:
+                module_logger.info(
+                    "Skipping disabled %s alerter: %s", alerter_type, this_alerter
+                )
+
             del new_alerter
         self.prune_alerters(alerters)
+        if not all_good:
+            module_logger.info(
+                "--- Loaded %d alerters but with errors", len(self.alerters)
+            )
+            return False
         module_logger.info("--- Loaded %d alerters", len(self.alerters))
+        return True
 
     def _setup_signals(self) -> None:
         """Set up the SIGHUP handler."""
@@ -402,6 +467,28 @@ class SimpleMonitor:
         """Clear all all monitors' dependency info back to default."""
         for key in list(self.monitors.keys()):
             self.monitors[key].reset_dependencies()
+            self.monitors[key].ran_this_time = False
+
+    def _verify_dep_chain(self, monitor: str, chain: list[str] | None = None) -> bool:
+        """Check for a loop in a dependency chain"""
+        if chain is None:
+            chain = []
+        if len(self.monitors[monitor].dependencies) == 0:
+            return True
+        if monitor in chain:
+            module_logger.critical(
+                "Configuration error: dependency loop: %s which depends on %s",
+                " depends on ".join(chain),
+                monitor,
+            )
+            return False
+        chain.append(monitor)
+        return all(
+            [
+                self._verify_dep_chain(m, chain)
+                for m in self.monitors[monitor].dependencies
+            ]
+        )
 
     def _verify_dependencies(self) -> bool:
         """Check if all monitors have valid dependencies."""
@@ -411,11 +498,15 @@ class SimpleMonitor:
             for dependency in monitor.dependencies:
                 if dependency not in monitors:
                     module_logger.critical(
-                        "Configuration error: dependency %s of monitor %s is not defined!",
+                        "Configuration error: dependency %s of monitor %s is not defined or is not enabled!",
                         dependency,
                         key,
                     )
                     ok = False
+        for key in self.monitors.keys():
+            if not self._verify_dep_chain(key):
+                ok = False
+                break
         return ok
 
     def verify_alerting(self) -> bool:
@@ -460,6 +551,7 @@ class SimpleMonitor:
         try:
             if monitor.should_run():
                 did_run = True
+                monitor.ran_this_time = True
                 start_time = time.time()
                 monitor.run_test()
                 end_time = time.time()
@@ -585,9 +677,7 @@ class SimpleMonitor:
         logger.check_dependencies(self.failed + self.still_failing + self.skipped)
         with logger:
             for key, monitor in self.monitors.items():
-                if check_group_match(monitor.group, logger.groups):
-                    logger.save_result2(key, monitor)
-                else:
+                if not check_group_match(monitor.group, logger.groups):
                     module_logger.debug(
                         "not logging for %s due to group mismatch (monitor in group %s, "
                         "logger has groups %s",
@@ -595,12 +685,22 @@ class SimpleMonitor:
                         monitor.group,
                         logger.groups,
                     )
-            try:
-                # need to work on a copy here to prevent the dicts changing under us
-                # during the loop, as remote instances can connect and update our data
-                # unpredictably
-                for host_monitors in self.remote_monitors.copy().values():
-                    for name, monitor in host_monitors.copy().items():
+                    continue
+                if logger.heartbeat and not monitor.ran_this_time:
+                    module_logger.debug(
+                        "not logging for %s as this logger is in heartbeat mode and"
+                        " the monitor did not run this loop",
+                        key,
+                    )
+                    continue
+                logger.save_result2(key, monitor)
+
+            # need to work on a copy here to prevent the dicts changing under us
+            # during the loop, as remote instances can connect and update our data
+            # unpredictably
+            for host_monitors in self.remote_monitors.copy().values():
+                for name, monitor in host_monitors.copy().items():
+                    try:
                         if check_group_match(monitor.group, logger.groups):
                             logger.save_result2(name, monitor)
                         else:
@@ -611,13 +711,16 @@ class SimpleMonitor:
                                 monitor.group,
                                 logger.groups,
                             )
-            except Exception:  # pragma: no cover
-                module_logger.exception("exception while logging remote monitors")
+                    except Exception:  # pragma: no cover
+                        module_logger.exception(
+                            "exception while logging remote monitors (offending monitor: %s)",
+                            name,
+                        )
 
     def do_alert(self, alerter: Alerter) -> None:
         """Use the given alerter object to send an alert, if needed."""
         alerter.check_dependencies(self.failed + self.still_failing + self.skipped)
-        for (name, this_monitor) in list(self.monitors.items()):
+        for name, this_monitor in list(self.monitors.items()):
             # Don't generate alerts for monitors which want it done remotely
             if this_monitor.remote_alerting:
                 module_logger.debug(
@@ -632,7 +735,7 @@ class SimpleMonitor:
             except Exception:  # pragma: no cover
                 module_logger.exception("exception caught while alerting for %s", name)
         for host_monitors in self.remote_monitors.copy().values():
-            for (name, monitor) in host_monitors.copy().items():
+            for name, monitor in host_monitors.copy().items():
                 try:
                     if monitor.remote_alerting:
                         alerter.send_alert(name, monitor)
@@ -739,7 +842,7 @@ class SimpleMonitor:
         seen_monitors = []  # type: List[str]
         if hostname not in self.remote_monitors:
             self.remote_monitors[hostname] = {}
-        for (name, state) in data.items():
+        for name, state in data.items():
             module_logger.info(
                 "updating remote monitor %s from host %s", name, hostname
             )
@@ -777,6 +880,13 @@ class SimpleMonitor:
                 forget_monitors.append(name)
         for name in forget_monitors:
             del self.remote_monitors[hostname][name]
+
+    @property
+    def remote_hosts(self) -> dict[str, RemoteHost]:
+        return self._remote_hosts
+
+    def upsert_remote_host(self, host: str, last_seen: datetime, address: str) -> None:
+        self._remote_hosts[host] = {"last_seen": last_seen, "address": address}
 
     def run_loop(self) -> None:
         """Run the complete monitor loop once."""

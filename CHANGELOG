@@ -1,3 +1,46 @@
+1.15.0:
+	* Drop Python 3.9 support
+	* Use regular text email, not MIME
+	* Use America/Phoenix timezone not MST
+	* Update MonitorPkgAudit to match new pkg behaviour
+	* Add reminders to monitors/alerting
+	* Add NUT monitor for UPSes
+	* Bump dependencies
+
+1.14.0:
+    * ...
+
+1.13.0:
+	* Add ntfy alerter
+
+1.12.1:
+	* Adjust no-alerters message to warn not critical
+	* Include output on "command" monitor failure
+	* Switch map output to just OSM
+	* Make make_start option required if map is enabled
+	* Improve help output and add basic man page
+	* Add hostname to notifications
+	* Support loading config files from a directory
+	* Add timeout for receive in network listener
+	* Add option to capture "command" monitor output
+	* Switch to icmplib for "ping" monitor
+
+1.12:
+	* Require Python 3.7+
+	* Add allow_redirects option for HTTP monitor
+	* Add port option for DNS monitor
+	* Improve reliability of network logging thread
+	* Fix display of 60 seconds up/downtime as "1:00" instead of "0:60"
+	* Add heartbeat option to Loggers
+	* Add downtime to monitor recovery message
+	* Add nextcloud alerter
+	* Add support for Ring camera
+	* Improve logic for OOH alerting
+	* Improve compound monitor alert/failure calculation
+	* Remove PyOpenSSL and use native SSL support
+	* Improve efficiency for copying HTML files around
+	* Fix double-call to record_fail in unix service monitor
+
 1.11:
 	* Run monitors multithreaded
 	* Add TLS certificate expiry monitor

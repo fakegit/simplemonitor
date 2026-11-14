@@ -1,4 +1,4 @@
-.PHONY: flake8 dist twine twine-test integration-tests env-test network-test black mypy linting mypy-strict bandit bandit-strict
+.PHONY: dist twine twine-test integration-tests env-test network-test ruff-check ruff-format ruff-format-check mypy linting mypy-strict bandit bandit-strict
 
 ifeq ($(OS),Windows_NT)
 MOCKSPATH := tests\mocks;
@@ -8,9 +8,6 @@ MOCKSPATH := $(PWD)/tests/mocks:
 INTEGRATION_CONFIG := tests/monitor.ini
 endif
 PIPENV := $(shell which poetry)
-
-flake8:
-	poetry run flake8 *.py simplemonitor/
 
 integration-tests:
 	PATH="$(MOCKSPATH)$(PATH)" $(PIPENV) run coverage run monitor.py -1 -v -d -f $(INTEGRATION_CONFIG) -j 1
@@ -39,8 +36,14 @@ twine-test:
 twine:
 	poetry run python -m twine upload dist/*
 
-black:
-	poetry run black --check --diff *.py simplemonitor/
+ruff-check:
+	poetry run ruff check monitor.py simplemonitor/
+
+ruff-format:
+	poetry run ruff format
+
+ruff-format-check:
+	poetry run ruff format --check --diff
 
 mypy:
 	poetry run mypy *.py simplemonitor/
@@ -54,7 +57,7 @@ bandit:
 bandit-strict:
 	poetry run bandit -r -l *.py simplemonitor/
 
-linting: black flake8 mypy bandit
+linting: ruff-format ruff-check mypy bandit
 
 docker-build:
 	docker build -f docker/monitor.Dockerfile .
@@ -66,4 +69,4 @@ html-bundle:
 	cd simplemonitor/html && npx webpack
 
 fix-html-tests:
-	for i in tests/html/*.html; do sed -i -E -e 's/1.12.0\+dev/__VERSION__/g' "$i"; done
+	for i in tests/html/*.html; do sed -i -E -e 's/1.12.0/__VERSION__/g' "$$i"; done

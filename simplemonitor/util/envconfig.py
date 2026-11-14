@@ -38,7 +38,7 @@ class EnvironmentAwareConfigParser(ConfigParser):
                 matches = self.r.search(section)
             if section != original_section:
                 self.add_section(section)
-                for (option, value) in self.items(original_section):
+                for option, value in self.items(original_section):
                     self.set(section, option, value)
                 self.remove_section(original_section)
         return result
@@ -49,9 +49,7 @@ class EnvironmentAwareInterpolation(BasicInterpolation):
 
     r = re.compile("%env:([a-zA-Z0-9_]+)%")
 
-    def before_get(
-        self, parser: Any, section: str, option: str, value: Any, defaults: Any
-    ) -> Any:
+    def before_get(self, parser, section, option, value, defaults):
         parser.get(section, option, raw=True, fallback=value)
         matches = self.r.search(value)
         old_value = value

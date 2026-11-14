@@ -49,9 +49,7 @@ class FileLogger(Logger):
         self.filename = self.get_config_option(
             "filename", required=True, allow_empty=False
         )
-        self.file_handle = open(
-            self.filename, "a+"
-        )  # pylint: disable=consider-using-with
+        self.file_handle = open(self.filename, "a+")  # pylint: disable=consider-using-with
 
         self.only_failures = self.get_config_option(
             "only_failures", required_type="bool", default=False
@@ -103,9 +101,7 @@ class FileLogger(Logger):
         """Close and reopen log file."""
         try:
             self.file_handle.close()
-            self.file_handle = open(
-                self.filename, "a+"
-            )  # pylint: disable=consider-using-with
+            self.file_handle = open(self.filename, "a+")  # pylint: disable=consider-using-with
         except OSError:
             self.logger_logger.exception(
                 "Couldn't reopen log file %s after HUP", self.filename
@@ -126,7 +122,7 @@ class FileLoggerNG(Logger):
     logger_type = "logfileng"
     only_failures = False
 
-    def __init__(self, config_options: dict = None) -> None:
+    def __init__(self, config_options: Optional[dict] = None) -> None:
         if config_options is None:
             config_options = {}
         super().__init__(config_options)
@@ -200,13 +196,12 @@ class HTMLLogger(Logger):
     filename = ""
     count_data = ""
 
-    def __init__(self, config_options: dict = None) -> None:
+    def __init__(self, config_options: Optional[dict] = None) -> None:
         if config_options is None:
             config_options = {}
         super().__init__(config_options)
-        package_data_dir = os.path.join(
-            os.path.dirname(sys.modules["simplemonitor"].__file__), "html"
-        )
+        package_path = sys.modules["simplemonitor"].__file__ or "."
+        package_data_dir = os.path.join(os.path.dirname(package_path), "html")
         self.filename = cast(
             str, self.get_config_option("filename", required=True, allow_empty=False)
         )
@@ -227,6 +222,16 @@ class HTMLLogger(Logger):
                 "copy_resources", required_type="bool", default=True
             ),
         )
+        self.navbar_title = cast(
+            str,
+            self.get_config_option(
+                "navbar_title", required=False, default="SimpleMonitor"
+            ),
+        )
+        self.visual_theme = cast(
+            str,
+            self.get_config_option("visual_theme", required=False, default="light"),
+        )
         self.upload_command = cast(
             str,
             self.get_config_option("upload_command", required=False, allow_empty=False),
@@ -246,7 +251,16 @@ class HTMLLogger(Logger):
             }  # type: Optional[Dict[str, str]]
         else:
             self.map_start = None
+        if self.map and not self.map_start:
+            raise RuntimeError(
+                f"map is set for logger {self.name} but map_start is missing or badly formatted"
+            )
         self.map_token = cast(str, self.get_config_option("map_token"))
+        if self.map_token:
+            self.logger_logger.info(
+                "map_token option for logger %s is no longer required; ignoring",
+                self.name,
+            )
         self._resource_files = [
             "dist/main.bundle.js*",
             "dist/maps.bundle.js*",
@@ -314,6 +328,7 @@ class HTMLLogger(Logger):
 
         data_line = {
             "monitor_name": monitor.name,
+            "monitor_url": monitor.navlink,
             "status": status,
             "status_text": status_text,
             "row_class": row_class,
@@ -395,6 +410,8 @@ class HTMLLogger(Logger):
             interval = 30
         file_handle.write(
             template.render(
+                navbar_title=self.navbar_title,
+                visual_theme=self.visual_theme,
                 status=self.status,
                 status_border=self.header_class,
                 host=socket.gethostname(),
@@ -445,6 +462,8 @@ class HTMLLogger(Logger):
                 self.logger_logger.exception(
                     "Failed to run upload command for HTML files"
                 )
+            except FileNotFoundError:
+                self.logger_logger.exception("Could not find upload command")
 
     def describe(self) -> str:
         return "Writing HTML page to {0}".format(self.filename)
@@ -491,7 +510,7 @@ class JsonLogger(Logger):
     filename = ""  # type: str
     supports_batch = True
 
-    def __init__(self, config_options: dict = None) -> None:
+    def __init__(self, config_options: Optional[dict] = None) -> None:
         if config_options is None:
             config_options = {}
         super().__init__(config_options)

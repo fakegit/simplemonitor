@@ -10,9 +10,17 @@ telegram - send to a chat
 
     the token to access Telegram
 
-.. confval:: client_id
+.. confval:: chat_id
 
     :type: string
     :required: true
 
     the chat id to send to
+
+.. confval:: timeout
+
+    :type: int
+    :required: false
+    :default: ``5``
+
+    Timeout for HTTP request to Telegram
